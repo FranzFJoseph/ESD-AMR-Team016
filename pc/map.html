@@ -1,0 +1,1203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Block 4.5 · 雷达点云与轨迹</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b23; --line:#2a3240;
+    --fg:#d8dee9; --dim:#7b8798; --accent:#4cc2ff;
+    --good:#3ddc97; --warn:#ffb454; --bad:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:13px/1.5 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  header{display:flex;align-items:center;gap:10px;padding:8px 12px;
+         background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+  header h1{font-size:14px;margin:0;font-weight:600;letter-spacing:.5px}
+  button{background:#1f2733;color:var(--fg);border:1px solid var(--line);
+         border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button:disabled{opacity:.45;cursor:default}
+  button.on{background:#123048;border-color:var(--accent);color:var(--accent)}
+  select{background:#1f2733;color:var(--fg);border:1px solid var(--line);
+         border-radius:6px;padding:5px 8px;font-size:12px}
+  input{background:#1f2733;color:var(--fg);border:1px solid var(--line);
+        border-radius:6px;padding:5px 8px;font-size:12px;width:6.5em}
+  .nav-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 14px}
+  .nav-controls label{white-space:nowrap}
+  #btnStop{color:#ffaaa6}
+  .nav-times{margin:0 10px 10px;max-height:none}
+  .nav-times summary{cursor:pointer;padding:3px 0}
+  #dNav{font-variant-numeric:tabular-nums}
+  #dCmd,#dDiagnostics{color:var(--dim);font-variant-numeric:tabular-nums}
+  .drive-status{margin:0 14px 10px;padding:8px 10px;background:var(--panel);
+                border-left:3px solid var(--line);font-variant-numeric:tabular-nums}
+  .drive-status.drive-ok{border-color:var(--good)}
+  .drive-status.drive-warn{border-color:var(--warn)}
+  .drive-status.drive-fault{border-color:var(--bad)}
+  #dDriveFault{margin:0 8px}
+  #dDriveReadings{color:var(--fg);margin:3px 0 0}
+  #dObstacleReadings{font-size:12px;margin-top:3px}
+  #dObstacleReadings.warn{color:var(--warn)}
+  #dControlReadings{font-size:12px;margin-top:3px}
+  @media(max-width:680px){main{grid-template-columns:1fr}}
+  main{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+        padding:8px;display:flex;flex-direction:column;min-height:0}
+  .card h2{font-size:12px;margin:0 0 6px;color:var(--dim);font-weight:600;
+           letter-spacing:.6px;text-transform:uppercase}
+  canvas{width:100%;aspect-ratio:1/1;display:block;border-radius:6px;background:#0a0d12}
+  footer{display:flex;gap:16px;flex-wrap:wrap;padding:8px 14px;
+         border-top:1px solid var(--line);color:var(--dim);font-size:12px}
+  footer b{color:var(--fg);font-weight:600}
+  .pill{padding:2px 8px;border-radius:999px;border:1px solid var(--line)}
+  .pill.ok{color:var(--good);border-color:#1d5c45}
+  .pill.warn{color:var(--warn);border-color:#5c4a1d}
+  .pill.bad{color:var(--bad);border-color:#5c1d1d}
+  .hint{color:var(--dim);font-size:11px;padding:0 12px 8px}
+
+  /* ---- 状态卡 & 事件表（PATCHED_DASH）---- */
+  .statcard{display:flex;gap:26px;align-items:flex-end;padding:8px 14px 10px;
+            border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+  .statcard .k{font-size:11px;color:var(--dim);letter-spacing:.5px}
+  .statcard .v{font-size:22px;font-weight:600;color:#eaf2ff;font-variant-numeric:tabular-nums;line-height:1.1}
+  .statcard .v small{font-size:12px;color:var(--dim);font-weight:400;margin-left:2px}
+  .evt{padding:6px 14px 10px;border-top:1px solid var(--line);background:var(--panel);max-height:186px;overflow:auto}
+  .evt h4{margin:0 0 6px;font-size:12px;color:var(--dim);font-weight:500;letter-spacing:.5px}
+  .evt table{width:100%;border-collapse:collapse;font-size:11.5px;font-variant-numeric:tabular-nums}
+  .evt th,.evt td{padding:2px 6px;text-align:left;border-bottom:1px solid #1d2430;white-space:nowrap}
+  .evt th{color:var(--dim);font-weight:500}
+  .evt td.n{color:#8fd6ff}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Block 4.5 · 雷达点云与轨迹</h1>
+  <button id="btnConnect">连接蓝牙</button>
+  <button id="btnSim">模拟模式</button>
+  <select id="selFilter">
+    <option value="hc">查找 HC-04BLE</option>
+    <option value="all">显示全部设备</option>
+  </select>
+  <button id="btnReset">重置视图</button>
+  <button id="btnClear">清空地图</button>
+  <button id="btnRec">记录 CSV</button>
+  <select id="selTtl" title="世界地图保留最近多少秒的扫面">
+    <option value="1500">地图只留当前圈</option>
+    <option value="4000">地图保留 4 秒</option>
+    <option value="8000">地图保留 8 秒</option>
+    <option value="20000">地图保留 20 秒</option>
+    <option value="0" selected>地图永久累积</option>
+  </select>
+  <span id="status" class="pill">未连接</span>
+</header>
+
+<section class="nav-controls" aria-label="自主导航控制">
+  <label>X（m） <input id="goalX" type="number" min="-3" max="3" step="0.001" value="0.00"></label>
+  <label>Y（m） <input id="goalY" type="number" min="-3" max="3" step="0.001" value="1.40"></label>
+  <button id="btnGoto" type="button" disabled>发送 GOTO</button>
+  <button id="btnStop" type="button" disabled>STOP</button>
+  <span id="dNav" aria-live="polite">等待导航遥测</span>
+  <span id="dCmd" role="status"></span>
+</section>
+
+<section id="driveStatus" class="drive-status" aria-label="固件版本与驱动诊断">
+  <strong id="dDriveMode">等待固件驱动诊断</strong>
+  <span id="dDriveFault" aria-live="polite"></span>
+  <div id="dDriveReadings"></div>
+  <div id="dObstacleReadings">等待 LiDAR 测距诊断</div>
+  <div id="dControlReadings">等待轮速与航向诊断</div>
+</section>
+
+<div class="statcard">
+  <div><div class="k">YAW</div><div class="v"><span id="dYaw">—</span><small>°</small></div></div>
+  <div><div class="k">角速度</div><div class="v"><span id="dW">—</span><small>°/s</small></div></div>
+  <div><div class="k">里程 X / Y</div><div class="v"><span id="dX">—</span> / <span id="dY">—</span><small>m</small></div></div>
+  <div><div class="k">线速</div><div class="v"><span id="dV">—</span><small>mm/s</small></div></div>
+  <div><div class="k">点 / 圈</div><div class="v"><span id="dPts">0</span> / <span id="dSweep">0</span></div></div>
+  <div><div class="k">链路</div><div class="v" style="font-size:14px"><span id="dLink">离线</span></div></div>
+</div>
+<main>
+  <section class="card">
+    <h2>极坐标雷达（原始角度）</h2>
+    <canvas id="cvPolar"></canvas>
+  </section>
+  <section class="card">
+    <h2>世界地图（里程计坐标系）</h2>
+    <canvas id="cvMap"></canvas>
+  </section>
+</main>
+
+<details class="evt nav-times" open>
+  <summary>任务实测时序</summary>
+  <table>
+    <thead><tr><th>任务</th><th>激活次数</th><th>最近间隔（ms）</th><th>最大执行时间（µs）</th></tr></thead>
+    <tbody id="timingBody"></tbody>
+  </table>
+  <div id="dDiagnostics">等待固件诊断数据</div>
+</details>
+
+<div class="evt">
+  <h4>事件（最近 20 条）</h4>
+  <table>
+    <thead><tr><th>时间</th><th>类型</th><th>序号</th><th>起始角</th><th>有效桶</th><th>累计帧</th></tr></thead>
+    <tbody id="evtBody"><tr><td colspan="6" style="color:var(--dim)">暂无事件</td></tr></tbody>
+  </table>
+</div>
+<footer>
+  <span>位姿 <b id="vPose">—</b></span>
+  <span>速度 <b id="vVel">—</b></span>
+  <span>编码器 <b id="vEnc">—</b></span>
+  <span>点 <b id="vPts">0</b></span>
+  <span>圈 <b id="vSweep">0</b></span>
+  <span>帧 <b id="vScan">0</b></span>
+</footer>
+<div class="hint">
+  鼠标滚轮缩放 · 拖动旋转/平移 · 单击世界图只填入坐标，点击「发送 GOTO」后才发指令。<br>
+  固件每 2 圈发 6 包 <code>S &lt;角度&gt; &lt;d0..d11&gt;</code>（5° 一桶，mm），每秒 1 行
+  <code>RT ... oX= oY= oT=</code> 提供位姿。
+</div>
+
+<script src="part2_protocol.js"></script>
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ 状态 */
+const BINS = 72;              // 5° 一桶
+const BIN_DEG = 5;
+const MAX_MM = 12000;
+
+const st = {
+  connected: false,
+  sim: false,
+  prevPose: null,
+  grid: new Map(),
+  evts: [],
+  gyro: 0,
+  lastTh: null,
+  lastThT: 0,
+  bins: new Float32Array(BINS).fill(0),
+  sweep: 0,
+  scanFrames: 0,
+  pts: [],                    // {x,y,t}
+  ttl: 0,                     // 世界地图保留时长(ms)，0=永久
+  trail: [],                  // {x,y}
+  pose: { x: 0, y: 0, th: 0, v: 0, w: 0, eL: 0, eR: 0 },
+  draftGoal: null,
+  nav: null,
+  navAt: 0,
+  waypoints: new Map(),
+  terminal: null,
+  terminalPose: null,
+  driveStatus: null,
+  driveAt: 0,
+  obstacleStatus: null,
+  obstacleAt: 0,
+  controlStatus: null,
+  controlAt: 0,
+  polar: { zoom: 1, rot: 0 },
+  map:   { zoom: 22, panX: 0, panY: 0 },   // px per meter
+  rec: false, recRows: [],
+  lastPoseTime: 0,
+  poseSample: null,
+};
+
+/* --------------------------------------------------------------- 画布工具 */
+function setupCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const r = cv.getBoundingClientRect();
+  const w = r.width  > 40 ? r.width  : 600;      /* PATCHED_EMPTY 兜底 */
+  const h = r.height > 40 ? r.height : 600;
+  cv.width  = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+
+function grid(ctx, w, h, cx, cy, step, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = cx % step; x < w; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+  for (let y = cy % step; y < h; y += step) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
+  ctx.stroke();
+}
+
+/* --------------------------------------------------------------- 极坐标图 */
+function drawPolar() {
+  const cv = document.getElementById("cvPolar");
+  const { ctx, w, h } = setupCanvas(cv);
+  const cx = w / 2, cy = h / 2;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#0a0d12";
+  ctx.fillRect(0, 0, w, h);
+
+  const R = Math.min(w, h) / 2 - 26;
+  const m2px = (R / 2) * st.polar.zoom;      // 视野默认 2 m
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(st.polar.rot);
+
+  // 距离圈
+  ctx.strokeStyle = "#232b38";
+  for (let i = 1; i <= 4; i++) {
+    ctx.beginPath();
+    ctx.arc(0, 0, (R / 4) * i, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // 十字
+  ctx.beginPath();
+  ctx.moveTo(-R, 0); ctx.lineTo(R, 0);
+  ctx.moveTo(0, -R); ctx.lineTo(0, R);
+  ctx.stroke();
+
+  // 点云
+  ctx.fillStyle = "#3ddc97";
+  ctx.shadowColor = "#3ddc97";
+  ctx.shadowBlur = 5;
+  for (let i = 0; i < BINS; i++) {
+    const d = st.bins[i];
+    if (d <= 0) continue;
+    const a = (i * BIN_DEG + BIN_DEG / 2) * Math.PI / 180;   // 顺时针
+    const r = Math.min(d, MAX_MM) / 1000 * m2px;
+    ctx.beginPath();
+    ctx.arc(r * Math.cos(a), r * Math.sin(a), 2.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+
+  // 原始角度在屏幕上从右向顺时针增大。
+  const sample = st.obstacleStatus;
+  const recentlyReported = sample && performance.now() - st.obstacleAt <= 3000;
+  if (recentlyReported) {
+    const stopHit = currentObstacleStop()?.run === sample.run && sample.stopMm && sample.stopQ6 >= 0;
+    const showNearest = sample.fresh && sample.nearestMm && sample.nearestQ6 >= 0;
+    if (stopHit || showNearest) {
+      const range = stopHit ? sample.stopMm : sample.nearestMm;
+      const angle = stopHit ? sample.stopQ6 : sample.nearestQ6;
+      const radialPosition = Math.min(range / 1000 * m2px, R);
+      ctx.save();
+      ctx.rotate(angle * Math.PI / (64 * 180));
+      ctx.strokeStyle = stopHit ? "#ff6b6b" : "#ffb454";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(6, 0); ctx.lineTo(Math.max(radialPosition, 25), 0);
+      ctx.stroke();
+      ctx.beginPath(); ctx.arc(radialPosition, 0, 4, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // 蓝色箭头使用车头标定值。原点在未标定时仍可见。
+  ctx.strokeStyle = "#4cc2ff";
+  ctx.lineWidth = 2;
+  if (recentlyReported && sample.frontQ6 >= 0) {
+    ctx.save();
+    ctx.rotate(sample.frontQ6 * Math.PI / (64 * 180));
+    ctx.beginPath();
+    ctx.moveTo(5, 0); ctx.lineTo(23, 0);
+    ctx.moveTo(18, -4); ctx.lineTo(23, 0); ctx.lineTo(18, 4);
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.beginPath();
+  ctx.arc(0, 0, 4, 0, Math.PI * 2);
+  ctx.fillStyle = "#4cc2ff";
+  ctx.fill();
+
+  ctx.restore();
+
+  /* PATCHED_EMPTY：没有任何回波时给个明确提示，避免看起来像白屏 */
+  if (!st.bins.some(function (d) { return d > 0; })) {
+    ctx.fillStyle = "#7b8798";
+    ctx.textAlign = "center";
+    ctx.font = "14px 'Segoe UI','Microsoft YaHei',sans-serif";
+    ctx.fillText(st.connected ? "已连接，等待点云…" : "未连接蓝牙（或先点模拟模式）", cx, cy + R * 0.55);
+    ctx.textAlign = "left";
+  }
+
+  // 刻度文字
+  ctx.fillStyle = "#7b8798";
+  ctx.font = "11px Consolas, monospace";
+  ctx.fillText((2 / st.polar.zoom).toFixed(1) + " m", 8, h - 8);
+}
+
+/* --------------------------------------------------------------- 世界地图 */
+function worldToScreen(p, w, h) {
+  const s = st.map.zoom;
+  return {
+    x: w / 2 + st.map.panX + p.x * s,
+    y: h / 2 + st.map.panY - p.y * s,   // 屏幕 y 向下，世界 y 向上
+  };
+}
+
+function drawMap() {
+  const cv = document.getElementById("cvMap");
+  const { ctx, w, h } = setupCanvas(cv);
+
+  ctx.fillStyle = "#0a0d12";
+  ctx.fillRect(0, 0, w, h);
+
+  const s = st.map.zoom;
+  const origin = worldToScreen({ x: 0, y: 0 }, w, h);
+  grid(ctx, w, h, origin.x, origin.y, s, "#1b2330");       // 1 m 网格
+
+  // 轨迹
+  if (st.trail.length > 1) {
+    ctx.strokeStyle = "#4cc2ff";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    st.trail.forEach((p, i) => {
+      const q = worldToScreen(p, w, h);
+      i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y);
+    });
+    ctx.stroke();
+  }
+
+  // 点云
+  ctx.fillStyle = "#3ddc97";
+  for (const p of st.pts) {
+    const q = worldToScreen(p, w, h);
+    if (q.x < -5 || q.y < -5 || q.x > w + 5 || q.y > h + 5) continue;
+    ctx.fillRect(q.x, q.y, 2.2, 2.2);
+  }
+
+  // 5 cm 占据栅格叠层（PATCHED_DASH）
+  const cell = 0.04 * s;
+  ctx.fillStyle = "rgba(120,150,190,0.30)";
+  for (const [k, c] of st.grid) {
+    if (c < 3) continue;
+    const q = worldToScreen({ x: parseFloat(k.split(",")[0]) * 0.04,
+                              y: parseFloat(k.split(",")[1]) * 0.04 }, w, h);
+    if (q.x < -cell || q.y < -cell || q.x > w + cell || q.y > h + cell) continue;
+    ctx.fillRect(q.x - cell / 2, q.y - cell / 2, cell, cell);
+  }
+
+  // 固件路径点按序号连接，收到缺失点前保留间断。
+  if (st.nav && st.nav.run) {
+    ctx.strokeStyle = "#ffb454";
+    ctx.fillStyle = "#ffb454";
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < st.nav.total; i++) {
+      const point = st.waypoints.get(i);
+      if (!point) continue;
+      const q = worldToScreen(point, w, h);
+      const previous = st.waypoints.get(i - 1);
+      if (previous) {
+        const p = worldToScreen(previous, w, h);
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
+      }
+      ctx.beginPath(); ctx.arc(q.x, q.y, i === st.nav.index ? 4 : 2.5, 0, Math.PI * 2); ctx.fill();
+    }
+    const target = worldToScreen(st.nav, w, h);
+    ctx.beginPath(); ctx.arc(target.x, target.y, 6, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // 在用户点击发送前，地图选择只作为坐标草稿。
+  if (st.draftGoal) {
+    const g = worldToScreen(st.draftGoal, w, h);
+    const rob = worldToScreen(st.pose, w, h);
+    ctx.strokeStyle = "#8796a9";
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(rob.x, rob.y); ctx.lineTo(g.x, g.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(g.x, g.y, 5, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // 机器人
+  const rob = worldToScreen(st.pose, w, h);
+  ctx.save();
+  ctx.translate(rob.x, rob.y);
+  ctx.rotate(-st.pose.th * Math.PI / 180);
+  ctx.fillStyle = "#4cc2ff";
+  ctx.beginPath();
+  ctx.moveTo(10, 0); ctx.lineTo(-6, 6); ctx.lineTo(-6, -6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // 比例尺
+  ctx.fillStyle = "#7b8798";
+  ctx.font = "11px Consolas, monospace";
+  ctx.fillText("1 m", w - 46, h - 10);
+  ctx.strokeStyle = "#7b8798";
+  ctx.beginPath();
+  ctx.moveTo(w - 46, h - 20); ctx.lineTo(w - 46 + s, h - 20);
+  ctx.stroke();
+}
+
+/* ------------------------------------------------------------- 协议解析 */
+/* ---- 事件表（PATCHED_DASH）---- */
+const EVT_MAX = 20;
+function pushEvt(type, seq, a0) {
+  let valid = 0;
+  for (let i = 0; i < BINS; i++) if (st.bins[i] > 0) valid++;
+  st.evts.unshift({ t: new Date(), type, seq, a0, valid, frames: st.scanFrames });
+  if (st.evts.length > EVT_MAX) st.evts.pop();
+  renderEvts();
+}
+function renderEvts() {
+  const tb = document.getElementById("evtBody");
+  if (!tb) return;
+  if (!st.evts.length) {
+    tb.innerHTML = '<tr><td colspan="6" style="color:var(--dim)">暂无事件</td></tr>';
+    return;
+  }
+  tb.innerHTML = st.evts.map(function (e) {
+    return '<tr><td>' + e.t.toLocaleTimeString("zh-CN", { hour12: false }) +
+           '</td><td>' + e.type +
+           '</td><td class="n">' + e.seq +
+           '</td><td>' + e.a0 + '°' +
+           '</td><td>' + e.valid + '/' + BINS +
+           '</td><td>' + e.frames + '</td></tr>';
+  }).join("");
+}
+
+const parse = {
+  /* "P <x_mm> <y_mm> <th_0.1deg>" —— 10 Hz 紧凑位姿行（PATCHED_POSEJS） */
+  p(line) {
+    const t = line.trim().split(/\s+/);
+    const x = parseFloat(t[1]), y = parseFloat(t[2]), th = parseFloat(t[3]);
+    if (!isFinite(x) || !isFinite(y) || !isFinite(th)) return;
+    st.pose.x = x / 1000;
+    st.pose.y = y / 1000;
+    st.pose.th = th / 10;
+    st.lastPoseTime = performance.now();
+    samplePose(st.lastPoseTime);
+  },
+
+  // "S 30 1200 0 800 ..."  角度单位度，距离单位 mm
+  scan(line) {
+    const t = line.trim().split(/\s+/);
+    if (t.length < 3 || t[0] !== "S") return;
+    const a0 = parseInt(t[1], 10);
+    if (!Number.isFinite(a0)) return;
+    const k = Math.floor(a0 / BIN_DEG);
+    for (let i = 2; i < t.length; i++) {
+      const d = parseInt(t[i], 10);
+      if (!Number.isFinite(d)) continue;
+      const idx = k + (i - 2);
+      if (idx >= 0 && idx < BINS) st.bins[idx] = d;
+    }
+    st.scanFrames++;
+    // 最后一包到齐后再投影。第 0 包到达时会先覆盖 0° 扇区，不能在那里收圈。
+    if (a0 + (t.length - 2) * BIN_DEG >= 360) {
+      pushEvt("SCAN", st.scanFrames, a0);
+      onSweepDone();
+    }
+  },
+
+  // "RT ax=.. az=.. gz=.. eL=.. eR=.. oX=.. oY=.. oT=.. o1=.. o2=.. v=.. w=.."
+  rt(line) {
+    if (!line.startsWith("RT ")) return;
+    const g = (k, def = 0) => {
+      const m = line.match(new RegExp(k + "=(-?\\d+)"));
+      return m ? parseInt(m[1], 10) : def;
+    };
+    const useRtPose = performance.now() - st.lastPoseTime > 250 || !st.poseSample;
+    if (useRtPose && line.includes("oX=") && line.includes("oY=") && line.includes("oT=")) {
+      st.pose.x = g("oX") / 1000;
+      st.pose.y = g("oY") / 1000;
+      st.pose.th = g("oT");
+      st.lastPoseTime = performance.now();
+      samplePose(st.lastPoseTime);
+    }
+    st.pose.v = g("v", st.pose.v);
+    st.pose.w = g("w", st.pose.w);
+    st.pose.eL = g("eL");
+    st.pose.eR = g("eR");
+    const nowT = performance.now();
+    if (st.lastTh !== null) {
+      const dt = (nowT - st.lastThT) / 1000;
+      if (dt > 0.02 && dt < 2) {
+        let dth = st.pose.th - st.lastTh;
+        if (dth > 180) dth -= 360; else if (dth < -180) dth += 360;
+        st.gyro = dth / dt;
+      }
+    }
+    st.lastTh = st.pose.th; st.lastThT = nowT;
+
+    updateHud();
+  },
+};
+
+function onSweepDone() {
+  st.sweep++;
+  // 把当前一圈投影到世界坐标
+  // 一圈扫描约 100 ms，期间车在动/在转：按点的角度在
+  // 「上一圈位姿 -> 本圈位姿」之间插值，避免整圈钉在一个位姿上（PATCHED_MAP4）
+  const P0 = st.prevPose || st.pose;
+  const P1 = st.pose;
+  let dth = P1.th - P0.th;
+  while (dth > 180) dth -= 360;
+  while (dth < -180) dth += 360;
+  const tnow = performance.now();
+  const frontQ6 = st.obstacleStatus?.frontQ6;
+  for (let i = 0; i < BINS; i++) {
+    const d = st.bins[i];
+    if (d <= 0) continue;
+    const aDeg = i * BIN_DEG + BIN_DEG / 2;
+    const f = Math.max(0, Math.min(1, aDeg / 360));
+    const th = (P0.th + dth * f) * Math.PI / 180;
+    const px = P0.x + (P1.x - P0.x) * f;
+    const py = P0.y + (P1.y - P0.y) * f;
+    const c = Math.cos(th), s = Math.sin(th);
+    const bodyDeg = frontQ6 >= 0 ? -(aDeg - frontQ6 / 64) : aDeg;
+    const a = bodyDeg * Math.PI / 180;
+    const xb = d / 1000 * Math.cos(a);
+    const yb = d / 1000 * Math.sin(a);
+    st.pts.push({
+      x: px + xb * c - yb * s,
+      y: py + xb * s + yb * c,
+      t: tnow,
+    });
+  }
+  st.prevPose = { x: P1.x, y: P1.y, th: P1.th };
+  if (st.pts.length > 60000) st.pts.splice(0, st.pts.length - 60000);
+
+  // 5 cm 占据栅格：同一格被多次命中即视为障碍（PATCHED_DASH）
+  for (let i = st.pts.length - 1, n = 0; i >= 0 && n < 400; i--, n++) {
+    const p = st.pts[i];
+    const key = Math.round(p.x / 0.04) + "," + Math.round(p.y / 0.04);
+    st.grid.set(key, (st.grid.get(key) || 0) + 1);
+  }
+  if (st.grid.size > 40000) st.grid.clear();
+
+  if (st.ttl > 0) {
+    const now = performance.now();
+    let cut = 0;
+    while (cut < st.pts.length && now - st.pts[cut].t > st.ttl) cut++;
+    if (cut) st.pts.splice(0, cut);
+  }
+
+  if (st.sim) samplePose();
+  updateHud();
+}
+
+const NAV_NAMES = ["空闲", "跟踪中", "已到达", "已停止", "故障", "等待 IMU", "台架预览", "LiDAR 保护停车"];
+const TASK_NAMES = ["IMU", "LiDAR", "蓝牙 RX", "路径生成", "位姿估计", "路径跟踪", "电机", "OLED", "蓝牙 TX"];
+const DIAGNOSTIC_NAMES = ["LiDAR 丢队列", "命令丢队列", "路径丢队列", "IMU 信号量满",
+                          "IMU 错误", "I2C 最大等待 µs", "串口丢字节"];
+const DRIVE_FAULTS = [
+  "", "目标坐标或路径无效", "控制周期或位姿异常", "导航超时", "IMU 数据中断",
+  "左轮未检测到编码器变化", "右轮未检测到编码器变化", "两侧均未检测到编码器变化",
+];
+const CSV_BASE_FIELDS = ["x_m", "y_m", "heading_deg", "run", "state", "goal_x_m", "goal_y_m",
+                         "index", "total", "task_or_command", "count", "period_us", "max_us"];
+const CSV_TASK_OFFSET = CSV_BASE_FIELDS.indexOf("task_or_command");
+const CSV_HEADER = ["time_ms", "source", "kind", ...CSV_BASE_FIELDS,
+                    ...Part2Protocol.diagnosticFields, ...Part2Protocol.driveFields,
+                    ...Part2Protocol.obstacleFields, ...Part2Protocol.controlFields];
+const CSV_OBSTACLE_OFFSET = CSV_BASE_FIELDS.length + Part2Protocol.diagnosticFields.length + Part2Protocol.driveFields.length;
+const CSV_CONTROL_OFFSET = CSV_OBSTACLE_OFFSET + Part2Protocol.obstacleFields.length;
+const CSV_DATA_COLUMNS = CSV_CONTROL_OFFSET + Part2Protocol.controlFields.length;
+const timingRows = new Map();
+for (const [index, task] of Part2Protocol.timingTasks.entries()) {
+  const row = document.getElementById("timingBody").insertRow();
+  row.insertCell().textContent = TASK_NAMES[index];
+  const values = Array.from({ length: 3 }, () => row.insertCell());
+  for (const value of values) value.textContent = "—";
+  timingRows.set(task, values);
+}
+
+function recordRow(kind, values) {
+  if (!st.rec) return;
+  const payload = [...values];
+  while (payload.length < CSV_DATA_COLUMNS) payload.push("");
+  st.recRows.push([Date.now(), st.sim ? "SIMULATED" : "HARDWARE", kind, ...payload].join(","));
+}
+
+function samplePose(timestamp = performance.now()) {
+  const { x, y, th } = st.pose;
+  const lastPose = st.poseSample;
+  if (lastPose) {
+    const dt = (timestamp - lastPose.timestamp) / 1000;
+    if (dt >= 0.02 && dt <= 2) {
+      st.pose.v = Math.round(Math.hypot(x - lastPose.x, y - lastPose.y) * 1000 / dt);
+      st.pose.w = Math.round(((th - lastPose.th + 540) % 360 - 180) / dt);
+      st.gyro = st.pose.w;
+    }
+  }
+  st.poseSample = { x, y, th, timestamp };
+  const last = st.trail[st.trail.length - 1];
+  if (!last || Math.hypot(last.x - x, last.y - y) >= 0.01) {
+    st.trail.push({ x, y });
+    if (st.trail.length > 4000) st.trail.shift();
+  }
+  recordRow("pose", [x, y, th, st.nav?.run ?? ""]);
+  if (st.terminal && !st.terminalPose) {
+    st.terminalPose = { x, y, th };
+    recordRow("terminal_pose", [x, y, th, st.terminal.run, st.terminal.state,
+      st.terminal.x, st.terminal.y, st.terminal.index, st.terminal.total]);
+    updateNavigation();
+  }
+  updateHud();
+}
+
+function resetNavigation() {
+  st.nav = null;
+  st.waypoints.clear();
+  st.trail = [];
+  st.terminal = st.terminalPose = null;
+  st.driveStatus = null;
+  st.driveAt = 0;
+  st.obstacleStatus = null;
+  st.obstacleAt = 0;
+  st.controlStatus = null;
+  st.controlAt = 0;
+  for (const values of timingRows.values()) {
+    for (const value of values) value.textContent = "—";
+  }
+  st.poseSample = null;
+  st.lastPoseTime = 0;
+  document.getElementById("dDiagnostics").textContent = "等待固件诊断数据";
+  updateNavigation();
+  updateDriveStatus();
+  updateObstacleStatus();
+  updateControlStatus();
+}
+
+function updateNavigation(now = performance.now()) {
+  const label = document.getElementById("dNav");
+  if (!st.nav) {
+    label.textContent = "等待导航遥测";
+    return;
+  }
+  const { run, state, x, y, index, total } = st.nav;
+  const protectionStop = state === Part2Protocol.lidarStopState || state === 4;
+  const drive = st.driveStatus;
+  const cause = protectionStop && drive?.run === run && now - st.driveAt <= 3000
+    ? Part2Protocol.lidarStops[drive.fault] : null;
+  const title = '第 ' + run + ' 次　' + (cause?.title ?? NAV_NAMES[state]);
+  let summary = !run ? title : title + '　目标 (' + x.toFixed(3) + ', ' + y.toFixed(3) + ') m　进度 ' + index + '/' + total;
+  if (st.terminalPose) {
+    const pose = st.terminalPose;
+    summary += '　估计终点 (' + pose.x.toFixed(3) + ', ' + pose.y.toFixed(3) + ') m / ' + pose.th.toFixed(1) + '°';
+    if (state === 2) summary += '　位置差 ' + Math.hypot(pose.x - x, pose.y - y).toFixed(3) + ' m';
+    const end = st.waypoints.get(total - 1);
+    const previous = st.waypoints.get(total - 2);
+    if (state === 2 && end && previous && (end.x !== previous.x || end.y !== previous.y)) {
+      const expected = Math.atan2(end.y - previous.y, end.x - previous.x) * 180 / Math.PI;
+      const error = ((pose.th - expected + 540) % 360) - 180;
+      summary += '　航向差 ' + error.toFixed(1) + '°';
+    }
+  }
+  if (now - st.navAt > 3000) summary += "　遥测已过期";
+  if (label.textContent !== summary) label.textContent = summary;
+}
+
+function currentObstacleStop(now = performance.now()) {
+  const status = st.driveStatus;
+  return status?.fault === 8 && now - st.driveAt <= 3000 ? status : null;
+}
+
+function formatLidarBearing(rawQ6, frontQ6) {
+  if (!(rawQ6 >= 0)) return "";
+  const rawDegrees = (rawQ6 / 64).toFixed(1);
+  const relativeQ6 = Part2Protocol.relativeBearingQ6(rawQ6, frontQ6);
+  if (relativeQ6 === null) return " / 雷达原始 " + rawDegrees + "°";
+  const relativeDeg = ((relativeQ6 / 64 + 180) % 360 - 180).toFixed(1);
+  return " / 雷达原始 " + rawDegrees + "°（相对车头 " + relativeDeg + "°，向右为正）";
+}
+
+function updateDriveStatus(now = performance.now()) {
+  const panel = document.getElementById("driveStatus");
+  const mode = document.getElementById("dDriveMode");
+  const fault = document.getElementById("dDriveFault");
+  const readings = document.getElementById("dDriveReadings");
+  const status = st.driveStatus;
+  if (!status) {
+    mode.textContent = "等待固件驱动诊断";
+    fault.textContent = st.connected ? "旧固件可查看 OLED 首行的 BENCH / DRIVE。" : "";
+    readings.textContent = "";
+    panel.className = "drive-status";
+    return;
+  }
+  const fresh = now - st.driveAt <= 3000;
+  mode.textContent = (st.sim ? "模拟 · " : "") + (status.drive ? "DRIVE · 实车版" : "BENCH · 台架版");
+  if (!fresh) {
+    fault.textContent = "驱动遥测已过期";
+  } else if (status.fault) {
+    const stop = Part2Protocol.lidarStops[status.fault];
+    const obstacle = st.obstacleStatus;
+    const hit = status.fault === 8 && obstacle?.run === status.run ? obstacle : null;
+    const distance = hit?.stopMm
+      ? "（触发距离 " + hit.stopMm + " mm" + formatLidarBearing(hit.stopQ6, hit.frontQ6) + "）" : "";
+    if (stop) fault.textContent = stop.title + distance + "。 " + stop.hint + " 本次导航不会自动继续。";
+    else fault.textContent = "故障 " + status.fault + "： " + (DRIVE_FAULTS[status.fault] || "未知故障");
+  } else {
+    fault.textContent = status.imuReady ? "IMU 已就绪" : "等待 IMU 就绪";
+  }
+  const lockNote = status.drive ? "" : "　台架版锁定电机输出，即使电机已接电也不会转动。";
+  readings.textContent = "运行 " + status.run + "　编码器原始计数 L/R " + status.leftTicks + " / " +
+    status.rightTicks + "　驱动指令 PWM L/R (‰) " + status.leftPwm + " / " + status.rightPwm + lockNote;
+  const tone = fresh && status.fault ? " drive-fault" :
+    !fresh || !status.drive || !status.imuReady ? " drive-warn" : " drive-ok";
+  panel.className = "drive-status" + tone;
+}
+
+function matchingControl(now = performance.now()) {
+  const control = st.controlStatus;
+  const run = st.nav?.run ?? st.driveStatus?.run;
+  return control?.run === run && now - st.controlAt <= 3000 ? control : null;
+}
+
+function updateControlStatus(now = performance.now()) {
+  const element = document.getElementById("dControlReadings");
+  const sample = matchingControl(now);
+  if (!sample) {
+    element.textContent = !st.controlStatus ? "等待轮速与航向诊断" :
+      now - st.controlAt > 3000 ? "轮速与航向遥测已过期" : "等待本次行驶控制数据";
+    return;
+  }
+  const brake = sample.brake ? "主动制动，电桥双输入高电平" : "主动制动未启用";
+  element.textContent = "轮速 L/R 目标 " + sample.leftRef + " / " + sample.rightRef +
+    " mm/s，实测 " + sample.leftActual + " / " + sample.rightActual +
+    " mm/s · 陀螺航向 " + (sample.gyroYaw10 / 10).toFixed(1) +
+    "°，融合航向 " + (sample.fusedYaw10 / 10).toFixed(1) +
+    "° · 静止陀螺零偏 " + (sample.biasMdps / 1000).toFixed(3) + "°/s · " + brake;
+}
+
+function updateObstacleStatus(now = performance.now()) {
+  const element = document.getElementById("dObstacleReadings");
+  const sample = st.obstacleStatus;
+  if (!sample) {
+    element.textContent = "等待 LiDAR 测距诊断";
+    element.className = "";
+    return;
+  }
+  if (now - st.obstacleAt > 3000) {
+    element.textContent = "LiDAR 测距遥测中断";
+    element.className = "warn";
+    return;
+  }
+  const health = sample.fresh ? "LiDAR 数据有效" : "LiDAR 数据过期";
+  const blocked = !sample.fresh ? "近障状态不可用" : sample.blocked ? "保护区内有近障" : "未触发近障保护";
+  const nearest = sample.nearestMm
+    ? sample.nearestMm + " mm" + formatLidarBearing(sample.nearestQ6, sample.frontQ6) : "无有效回波";
+  const distance = sample.fresh ? "最近外部回波" : "最后外部回波";
+  const motion = sample.motion === undefined ? "" : " · 运动方向 " + Part2Protocol.lidarMotions[sample.motion];
+  let guard = "";
+  if (sample.frontQ6 !== undefined) {
+    if (sample.frontQ6 < 0) guard = " · 车头未标定，400 mm 全向保护";
+    else if (sample.motion === 1 || sample.motion === 2) guard = " · 行驶方向保护";
+    else guard = " · 近身保护";
+  }
+  element.textContent = health + " · " + blocked + " · " + distance + " " + nearest + motion + guard;
+  element.className = sample.fresh && !sample.blocked ? "" : "warn";
+}
+
+function acceptPart2(message) {
+  const now = performance.now();
+  if (message.kind === "N") {
+    const previous = st.nav;
+    if (!previous || message.run !== previous.run) {
+      st.waypoints.clear();
+      st.trail = [];
+      st.terminal = null;
+      st.terminalPose = null;
+    }
+    if (message.run && [1, 6].includes(message.state)) st.draftGoal = null;
+    if (message.run && [2, 3, 4, Part2Protocol.lidarStopState].includes(message.state) && !st.terminal) st.terminal = message;
+    if (!previous || message.run !== previous.run || message.state !== previous.state || message.index !== previous.index) {
+      recordRow("nav", ["", "", "", message.run, message.state, message.x, message.y,
+        message.index, message.total]);
+    }
+    st.nav = message;
+    st.navAt = now;
+    updateNavigation(now);
+    updateControlStatus(now);
+    if (st.driveStatus) updateDriveStatus(now);
+  } else if (message.kind === "W" && st.nav && st.nav.run === message.run && message.index < st.nav.total) {
+    if (!st.waypoints.has(message.index)) {
+      recordRow("waypoint", [message.x, message.y, "", message.run, "", "", "", message.index]);
+    }
+    st.waypoints.set(message.index, message);
+    updateNavigation(now);
+  } else if (message.kind === "T") {
+    const [count, period, maximum] = timingRows.get(message.task);
+    count.textContent = message.count;
+    period.textContent = message.count >= 2 ? (message.periodUs / 1000).toFixed(3) : "—";
+    maximum.textContent = message.count ? message.maxUs : "—";
+    recordRow("timing", [...Array(CSV_TASK_OFFSET).fill(""), message.task, message.count, message.periodUs, message.maxUs]);
+  } else if (message.kind === "D") {
+    document.getElementById("dDiagnostics").textContent = DIAGNOSTIC_NAMES.map((name, i) =>
+      name + " " + message.values[i]).join(" · ");
+    recordRow("diagnostics", [...Array(CSV_BASE_FIELDS.length).fill(""), ...message.values]);
+  } else if (message.kind === "A") {
+    st.driveStatus = message;
+    st.driveAt = now;
+    const values = Array(CSV_BASE_FIELDS.length + Part2Protocol.diagnosticFields.length).fill("");
+    values[3] = message.run;
+    recordRow("drive", [...values, message.drive, message.fault, message.imuReady,
+      message.leftTicks, message.rightTicks, message.leftPwm, message.rightPwm]);
+    updateDriveStatus(now);
+    updateNavigation(now);
+    updateControlStatus(now);
+  } else if (message.kind === "O") {
+    const run = st.nav?.run;
+    const previousFront = st.obstacleStatus?.frontQ6;
+    const front = message.frontQ6;
+    if ((previousFront >= 0 || front >= 0) && previousFront !== front) {
+      st.pts = [];
+      st.grid.clear();
+      st.prevPose = null;
+    }
+    st.obstacleStatus = { ...message, run };
+    st.obstacleAt = now;
+    const values = Array(CSV_OBSTACLE_OFFSET).fill("");
+    values[3] = run ?? "";
+    recordRow("obstacle", [...values, message.fresh, message.blocked, message.nearestMm, message.stopMm,
+      message.nearestQ6, message.stopQ6, message.motion, message.frontQ6]);
+    updateObstacleStatus(now);
+    if (st.driveStatus?.fault === 8) updateDriveStatus(now);
+  } else if (message.kind === "C") {
+    st.controlStatus = message;
+    st.controlAt = now;
+    const values = Array(CSV_CONTROL_OFFSET).fill("");
+    values[3] = message.run;
+    recordRow("control", [...values, message.leftRef, message.rightRef,
+      message.leftActual, message.rightActual, message.gyroYaw10, message.fusedYaw10,
+      message.biasMdps, message.brake]);
+    updateControlStatus(now);
+    if (st.driveStatus) updateDriveStatus(now);
+  }
+}
+
+/* ------------------------------------------------------------------ 蓝牙 */
+let btDevice = null, btNotify = null, btWrite = null;
+let btListener = null;
+let connecting = false, sending = false;
+
+function setCommandAvailability() {
+  const available = st.connected && btWrite && !sending && !st.sim;
+  document.getElementById("btnGoto").disabled = !available;
+  document.getElementById("btnStop").disabled = !available;
+  document.getElementById("btnConnect").disabled = connecting;
+}
+
+async function sendCommand(line) {
+  if (!st.connected || !btWrite || sending || st.sim) return;
+  const status = document.getElementById("dCmd");
+  const bytes = new TextEncoder().encode(line);
+  sending = true;
+  setCommandAvailability();
+  try {
+    if (btWrite.properties.writeWithoutResponse) await btWrite.writeValueWithoutResponse(bytes);
+    else await btWrite.writeValueWithResponse(bytes);
+    status.textContent = "已发送 " + line.trim();
+    recordRow("command", [...Array(CSV_TASK_OFFSET).fill(""), line.trim()]);
+  } catch (e) {
+    status.textContent = "发送失败 " + e.message;
+  } finally {
+    sending = false;
+    setCommandAvailability();
+  }
+}
+
+async function connectBt() {
+  if (!navigator.bluetooth) {
+    alert("这个浏览器不支持 Web Bluetooth。\n请用 Chrome / Edge，并通过 http://localhost 打开本页。");
+    return;
+  }
+  if (connecting) return;
+  if (st.connected && btDevice) {
+    btDevice.gatt.disconnect();
+    return;
+  }
+  if (st.rec) document.getElementById("btnRec").click();
+  if (st.sim) toggleSim();
+  resetNavigation();
+  connecting = true;
+  setCommandAvailability();
+  try {
+    const filter = document.getElementById("selFilter").value;
+    const opts = {
+      optionalServices: [0xffe0, 0xff10],
+      filters: filter === "hc" ? [{ namePrefix: "HC" }, { namePrefix: "Group" }] : undefined,
+      acceptAllDevices: filter !== "hc",
+    };
+    const device = await navigator.bluetooth.requestDevice(opts);
+    btDevice = device;
+    const server = await device.gatt.connect();
+    const svc = (await server.getPrimaryService(0xffe0).catch(() => null)) ||
+                (await server.getPrimaryService(0xff10));
+    const chars = await svc.getCharacteristics();
+    btNotify = chars.find(c => c.properties.notify);
+    if (!btNotify) throw new Error("蓝牙服务没有通知通道");
+    const writable = c => c.properties.writeWithoutResponse || c.properties.write;
+    btWrite = writable(btNotify) ? btNotify : chars.find(writable);
+    const receive = Part2Protocol.lineReceiver(feedLine);
+    btListener = ev => {
+      const v = ev.target.value;
+      let s = "";
+      for (let i = 0; i < v.byteLength; i++) s += String.fromCharCode(v.getUint8(i));
+      receive(s);
+    };
+    btNotify.addEventListener("characteristicvaluechanged", btListener);
+    await btNotify.startNotifications();
+    device.addEventListener("gattserverdisconnected", () => {
+      if (btDevice !== device) return;
+      st.connected = false;
+      btNotify?.removeEventListener("characteristicvaluechanged", btListener);
+      btListener = null;
+      btNotify = btWrite = null;
+      setCommandAvailability();
+      document.getElementById("btnConnect").textContent = "连接蓝牙";
+      setStatus("已断开", "bad");
+      updateHud();
+    }, { once: true });
+    st.connected = true;
+    document.getElementById("btnConnect").textContent = "断开蓝牙";
+    setStatus("已连接 " + (device.name || ""), "ok");
+    document.getElementById("dCmd").textContent = btWrite ? "" : "此服务没有指令写入通道";
+    updateHud();
+  } catch (e) {
+    btNotify?.removeEventListener("characteristicvaluechanged", btListener);
+    btListener = null;
+    if (btDevice && btDevice.gatt.connected) btDevice.gatt.disconnect();
+    btNotify = btWrite = null;
+    setStatus("连接失败：" + e.message, "bad");
+  } finally {
+    connecting = false;
+    setCommandAvailability();
+  }
+}
+
+function feedLine(line) {
+  if (line[0] === "S" && line[1] === " ") parse.scan(line);
+  else if (line[0] === "P" && line[1] === " ") parse.p(line);
+  else if (line.startsWith("RT ")) parse.rt(line);
+  else {
+    const message = Part2Protocol.parse(line);
+    if (message) acceptPart2(message);
+  }
+}
+
+/* ------------------------------------------------------------------ 模拟 */
+let simTimer = null;
+function toggleSim() {
+  if (st.connected || connecting) return;
+  if (st.rec) document.getElementById("btnRec").click();
+  if (st.sim) {
+    clearInterval(simTimer); simTimer = null;
+    st.sim = false;
+    resetNavigation();
+    document.getElementById("btnSim").classList.remove("on");
+    document.getElementById("dCmd").textContent = "";
+    setStatus("模拟已停止", "warn");
+    return;
+  }
+  st.sim = true;
+  resetNavigation();
+  setCommandAvailability();
+  document.getElementById("btnSim").classList.add("on");
+  setStatus("模拟模式", "warn");
+  document.getElementById("dCmd").textContent = "模拟数据，按钮不发送指令";
+  let t = 0;
+  let sample = 0;
+  simTimer = setInterval(() => {
+    t += 0.2;
+    sample++;
+    const position = Math.min(1400, Math.round(t * 280));
+    const progress = Math.floor(position / 100);
+    feedLine("N 1 " + (position === 1400 ? 2 : 1) + " 0 1400 " + progress + " 14");
+    feedLine("P 0 " + position + " 900");
+    // 8 m × 6 m 房间 + 一个柱子
+    for (let i = 0; i < BINS; i++) {
+      const a = (i * BIN_DEG + BIN_DEG / 2) * Math.PI / 180;
+      const cx = Math.cos(a), cy = Math.sin(a);
+      let d = 1e9;
+      if (Math.abs(cy) > 1e-6) {
+        const tx = ((cx > 0 ? 4 : -4) - st.pose.x) / cx;
+        const ty = ((cy > 0 ? 3 : -3) - st.pose.y) / cy;
+        if (tx > 0) d = Math.min(d, tx);
+        if (ty > 0) d = Math.min(d, ty);
+      }
+      st.bins[i] = Math.min(d * 1000, 12000);
+    }
+    st.pose.v = position === 1400 ? 0 : 280; st.pose.w = 0;
+    st.pose.eL = position * 5; st.pose.eR = position * 5;
+    onSweepDone();
+    for (let i = 0; i < 14; i++) feedLine("W 1 " + i + " 0 " + ((i + 1) * 100));
+    const task = Part2Protocol.timingTasks[(sample - 1) % Part2Protocol.timingTasks.length];
+    const period = task === "oled" || task === "tx" ? 50000 : 10000;
+    feedLine("T " + task + " " + Math.floor(t * 20) + " " + period + " 200");
+    feedLine("D 0 0 0 0 0 14 0");
+    feedLine("A 1 0 0 1 " + st.pose.eL + " " + st.pose.eR + " 0 0");
+    const speed = position === 1400 ? 0 : 280;
+    feedLine("C 1 " + speed + " " + speed + " " + speed + " " + speed + " 900 900 14 0");
+    let nearestBin = -1;
+    st.bins.forEach((distance, i) => {
+      if (distance > 0 && (nearestBin < 0 || distance < st.bins[nearestBin])) nearestBin = i;
+    });
+    const nearest = nearestBin >= 0 ? Math.round(st.bins[nearestBin]) : 0;
+    const nearestQ6 = nearestBin >= 0 ? (nearestBin * BIN_DEG + BIN_DEG / 2) * 64 : -1;
+    feedLine("O 1 0 " + nearest + " 0 " + nearestQ6 + " -1 " + (position === 1400 ? 0 : 1) + " 0");
+  }, 200);
+}
+
+/* -------------------------------------------------------------------- UI */
+function setStatus(text, cls) {
+  const el = document.getElementById("status");
+  el.textContent = text;
+  el.className = "pill " + (cls || "");
+}
+
+function updateHud() {
+  document.getElementById("vPose").textContent =
+    `x ${st.pose.x.toFixed(2)} m  y ${st.pose.y.toFixed(2)} m  θ ${st.pose.th.toFixed(1)}°`;
+  document.getElementById("vVel").textContent = `v ${st.pose.v} mm/s  w ${st.pose.w} °/s`;
+  document.getElementById("vEnc").textContent = `${st.pose.eL} / ${st.pose.eR}`;
+  document.getElementById("vPts").textContent = String(st.pts.length);
+  document.getElementById("vSweep").textContent = String(st.sweep);
+  document.getElementById("vScan").textContent = String(st.scanFrames);
+  const setT = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setT("dYaw", st.pose.th.toFixed(1));
+  setT("dW", st.gyro.toFixed(1));
+  setT("dX", st.pose.x.toFixed(2));
+  setT("dY", st.pose.y.toFixed(2));
+  setT("dV", String(st.pose.v));
+  setT("dPts", String(st.pts.length));
+  setT("dSweep", String(st.sweep));
+  setT("dLink", st.connected ? "在线" : "离线");
+}
+
+function loop() {
+  try {
+    updateNavigation();
+    if (st.driveStatus && performance.now() - st.driveAt > 3000 &&
+        document.getElementById("dDriveFault").textContent !== "驱动遥测已过期") updateDriveStatus();
+    if (st.obstacleStatus && performance.now() - st.obstacleAt > 3000 &&
+        document.getElementById("dObstacleReadings").textContent !== "LiDAR 测距遥测中断") updateObstacleStatus();
+    if (st.controlStatus && performance.now() - st.controlAt > 3000 &&
+        document.getElementById("dControlReadings").textContent !== "轮速与航向遥测已过期") {
+      updateControlStatus();
+      if (st.driveStatus) updateDriveStatus();
+    }
+    drawPolar();
+    drawMap();
+  } catch (e) {                      /* PATCHED_EMPTY：出错也让人看得见 */
+    setStatus("绘图异常: " + e.message, "bad");
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ------------------------------------------------------------------ 事件 */
+document.getElementById("btnConnect").onclick = connectBt;
+document.getElementById("btnSim").onclick = toggleSim;
+document.getElementById("btnGoto").onclick = () => {
+  const x = document.getElementById("goalX").value;
+  const y = document.getElementById("goalY").value;
+  try {
+    const command = Part2Protocol.targetCommand(x, y);
+    st.draftGoal = { x: Number(x), y: Number(y) };
+    sendCommand(command);
+  } catch (e) {
+    document.getElementById("dCmd").textContent = e.message;
+  }
+};
+document.getElementById("btnStop").onclick = () => sendCommand("STOP\r\n");
+for (const id of ["goalX", "goalY"]) {
+  document.getElementById(id).addEventListener("input", () => { st.draftGoal = null; });
+}
+document.getElementById("btnReset").onclick = () => {
+  st.polar.zoom = 1; st.polar.rot = 0;
+  st.map.zoom = 22; st.map.panX = 0; st.map.panY = 0;
+};
+document.getElementById("btnClear").onclick = () => {
+  st.pts = []; st.trail = []; st.sweep = 0; st.scanFrames = 0;
+  st.bins.fill(0);
+  st.grid.clear(); st.evts = []; st.gyro = 0; st.lastTh = null;   /* PATCHED_DASH2 */
+  renderEvts(); updateHud();
+};
+document.getElementById("btnRec").onclick = () => {
+  st.rec = !st.rec;
+  document.getElementById("btnRec").classList.toggle("on", st.rec);
+  document.getElementById("btnRec").textContent = st.rec ? "结束并下载 CSV" : "记录 CSV";
+  if (!st.rec && st.recRows.length) {
+    const blob = new Blob([CSV_HEADER.join(",") + "\n" + st.recRows.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    a.href = url;
+    a.download = "coding-day4-" + Date.now() + ".csv";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    st.recRows = [];
+  }
+};
+
+/* 极坐标：滚轮缩放 + 拖动旋转 */
+(function () {
+  const cv = document.getElementById("cvPolar");
+  let dragging = false, lastX = 0;
+  cv.addEventListener("wheel", e => {
+    e.preventDefault();
+    st.polar.zoom = Math.min(20, Math.max(0.2, st.polar.zoom * (e.deltaY < 0 ? 1.1 : 0.9)));
+  }, { passive: false });
+  cv.addEventListener("mousedown", e => { dragging = true; lastX = e.clientX; });
+  window.addEventListener("mouseup", () => { dragging = false; });
+  window.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    st.polar.rot += (e.clientX - lastX) * 0.005;
+    lastX = e.clientX;
+  });
+})();
+
+/* 世界地图：滚轮缩放 + 拖动平移 + 单击设目标 */
+(function () {
+  const cv = document.getElementById("cvMap");
+  let dragging = false, lastX = 0, lastY = 0, moved = 0;
+  cv.addEventListener("wheel", e => {
+    e.preventDefault();
+    const f = e.deltaY < 0 ? 1.15 : 0.87;
+    st.map.zoom = Math.min(200, Math.max(3, st.map.zoom * f));
+  }, { passive: false });
+  cv.addEventListener("mousedown", e => {
+    dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+  });
+  window.addEventListener("mouseup", e => {
+    if (dragging && moved < 4 && e.target === cv) {
+      const r = cv.getBoundingClientRect();
+      const s = st.map.zoom;
+      st.draftGoal = {
+        x: (e.clientX - r.left - r.width / 2 - st.map.panX) / s,
+        y: -(e.clientY - r.top - r.height / 2 - st.map.panY) / s,
+      };
+      document.getElementById("goalX").value = st.draftGoal.x.toFixed(3);
+      document.getElementById("goalY").value = st.draftGoal.y.toFixed(3);
+    }
+    dragging = false;
+  });
+  window.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    st.map.panX += e.clientX - lastX;
+    st.map.panY += e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY; moved += 1;
+  });
+})();
+
+window.addEventListener("resize", () => { drawPolar(); drawMap(); });
+
+/* 启动 */
+setStatus("未连接", "warn");
+updateHud();
+
+const selTtl = document.getElementById('selTtl');
+if (selTtl) selTtl.addEventListener('change', function (e) {
+  st.ttl = parseInt(e.target.value, 10) || 0;
+});
+
+loop();
+</script>
+</body>
+</html>
